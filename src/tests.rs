@@ -1,8 +1,64 @@
 use super::*;
 use csv::{ReaderBuilder, WriterBuilder};
 use job_queue::Account;
+use rust_decimal_macros::dec;
 use std::io::Cursor;
 use types::TransactionType;
+
+macro_rules! deposit {
+    ($client:expr, $tx:expr, $amount:expr) => {
+        Transaction {
+            tx_type: TransactionType::Deposit,
+            client: $client,
+            tx: $tx,
+            amount: Some(dec!($amount)),
+        }
+    };
+}
+
+macro_rules! withdraw {
+    ($client:expr, $tx:expr, $amount:expr) => {
+        Transaction {
+            tx_type: TransactionType::Withdrawal,
+            client: $client,
+            tx: $tx,
+            amount: Some(dec!($amount)),
+        }
+    };
+}
+
+macro_rules! dispute {
+    ($client:expr, $tx:expr) => {
+        Transaction {
+            tx_type: TransactionType::Dispute,
+            client: $client,
+            tx: $tx,
+            amount: None,
+        }
+    };
+}
+
+macro_rules! resolve {
+    ($client:expr, $tx:expr) => {
+        Transaction {
+            tx_type: TransactionType::Resolve,
+            client: $client,
+            tx: $tx,
+            amount: None,
+        }
+    };
+}
+
+macro_rules! chargeback {
+    ($client:expr, $tx:expr) => {
+        Transaction {
+            tx_type: TransactionType::ChargeBack,
+            client: $client,
+            tx: $tx,
+            amount: None,
+        }
+    };
+}
 
 #[test]
 fn deserialize() -> Result<(), CliError> {
@@ -62,4 +118,62 @@ client,available,held,total,locked
 
     assert_eq!(written, expected);
     Ok(())
+}
+
+/// Q: why expect inside tests?
+/// A: because the tracebacks are slightly nicer and
+/// I don't want to do the panic catching trick
+
+#[test]
+fn basic() {
+    let mut states = AccountStates::new("./basic_flow").expect("failed");
+    states.submit(deposit!(1, 1, 100.0)).expect("failed");
+    states.submit(withdraw!(1, 2, 50.0)).expect("failed");
+
+    let accounts = states.finish();
+    let account = accounts.first().expect("failed");
+
+    assert_eq!(account.available(), dec!(50.0));
+    assert_eq!(account.total(), dec!(50.0));
+}
+
+#[test]
+fn dispute_flow() {
+    let mut states = AccountStates::new("./dispute_flow").expect("failed");
+    states.submit(deposit!(1, 1, 100.0)).expect("failed");
+    states.submit(dispute!(1, 1)).expect("failed");
+    states.submit(resolve!(1, 1)).expect("failed");
+
+    let accounts = states.finish();
+    let account = accounts.first().expect("failed");
+
+    assert_eq!(account.available(), dec!(100.0));
+    assert_eq!(account.held(), dec!(0.0));
+}
+
+#[test]
+fn locked_account_rejects_withdraw() {
+    let mut states = AccountStates::new("./locked_flow").expect("failed");
+    states.submit(deposit!(1, 1, 100.0)).expect("failed");
+    states.submit(dispute!(1, 1)).expect("failed");
+    states.submit(chargeback!(1, 1)).expect("failed");
+    states.submit(withdraw!(1, 2, 50.0)).expect("failed");
+
+    let accounts = states.finish();
+    let account = accounts.first().expect("failed");
+    assert_eq!(account.available(), dec!(100.0));
+    assert_eq!(account.total(), dec!(100.0));
+    assert!(account.locked());
+}
+
+#[test]
+fn insufficient_funds_withdraw() {
+    let mut states = AccountStates::new("./insufficient").expect("failed");
+    states.submit(deposit!(1, 1, 100.0)).expect("failed");
+    states.submit(withdraw!(1, 2, 150.0)).expect("failed");
+
+    let accounts = states.finish();
+    let account = accounts.first().expect("failed");
+    assert_eq!(account.available(), dec!(100.0)); // balance unchanged
+    assert_eq!(account.total(), dec!(100.0));
 }

@@ -22,6 +22,6 @@ pub enum CliError {
     BigPrecision,
     #[error("Database error: {0}")]
     Db(#[from] fjall::Error),
-    #[error("Bincode error: {0}")]
-    Bincode(#[from] Box<bincode::ErrorKind>),
+    #[error("Cbor error: {0}")]
+    Bincode(#[from] serde_cbor::Error),
 }

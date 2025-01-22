@@ -17,6 +17,25 @@ pub struct Account {
     locked: bool,
 }
 
+#[cfg(test)]
+impl Account {
+    pub fn held(&self) -> Decimal {
+        self.held
+    }
+
+    pub fn total(&self) -> Decimal {
+        self.total
+    }
+
+    pub fn available(&self) -> Decimal {
+        self.available
+    }
+
+    pub fn locked(&self) -> bool {
+        self.locked
+    }
+}
+
 impl Account {
     pub fn new(id: ClientId) -> Self {
         Self {
@@ -109,7 +128,7 @@ impl AccountStates {
         let succeeded = acct.deposit(tx.amount.unwrap());
 
         let deposit = TransactionRecord::deposit(tx.client, tx.amount.unwrap(), succeeded);
-        let encoded = bincode::serialize(&deposit)?;
+        let encoded = serde_cbor::to_vec(&deposit)?;
         self.transactions.insert(&tx.tx.to_be_bytes(), encoded)?;
         Ok(())
     }
@@ -123,7 +142,7 @@ impl AccountStates {
         let successful = acct.withdraw(tx.amount.unwrap());
 
         let withdrawal = TransactionRecord::withdrawal(tx.client, tx.amount.unwrap(), successful);
-        let encoded = bincode::serialize(&withdrawal)?;
+        let encoded = serde_cbor::to_vec(&withdrawal)?;
         self.transactions.insert(&tx.tx.to_be_bytes(), encoded)?;
         Ok(())
     }
@@ -133,13 +152,15 @@ impl AccountStates {
             return Ok(());
         };
 
-        let mut record: TransactionRecord = bincode::deserialize(&encoded)?;
+        let mut record: TransactionRecord = serde_cbor::from_slice(&encoded)?;
         let amount = record.successful_amount();
 
+        // If already disputed or the records don't line up ignore
         if record.client() != tx.client || record.disputed() {
             return Ok(());
         }
 
+        // If the tx never went through, there is nothing to dispute
         let Some(amount) = amount else {
             return Ok(());
         };
@@ -152,7 +173,7 @@ impl AccountStates {
         acct.dispute(amount * record.direction());
 
         record.dispute();
-        let encoded = bincode::serialize(&record)?;
+        let encoded = serde_cbor::to_vec(&record)?;
         self.transactions.insert(&tx.tx.to_be_bytes(), encoded)?;
         Ok(())
     }
@@ -162,13 +183,15 @@ impl AccountStates {
             return Ok(());
         };
 
-        let mut record: TransactionRecord = bincode::deserialize(&encoded)?;
+        let mut record: TransactionRecord = serde_cbor::from_slice(&encoded)?;
         let amount = record.successful_amount();
 
+        // If not yet disputed or the records don't line up ignore
         if record.client() != tx.client || !record.disputed() {
             return Ok(());
         }
 
+        // If the tx failed, there is nothing to dispute
         let Some(amount) = amount else {
             return Ok(());
         };
@@ -181,7 +204,7 @@ impl AccountStates {
         acct.resolve(amount * record.direction());
 
         record.resolve_dispute();
-        let encoded = bincode::serialize(&record)?;
+        let encoded = serde_cbor::to_vec(&record)?;
         self.transactions.insert(&tx.tx.to_be_bytes(), encoded)?;
         Ok(())
     }
@@ -191,10 +214,10 @@ impl AccountStates {
             return Ok(());
         };
 
-        let record: TransactionRecord = bincode::deserialize(&encoded)?;
+        let record: TransactionRecord = serde_cbor::from_slice(&encoded)?;
         let amount = record.successful_amount();
 
-        if record.client() != tx.client {
+        if record.client() != tx.client || !record.disputed() {
             return Ok(());
         }
 
