@@ -1,5 +1,6 @@
 use super::CliError;
 use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
 use serde::{self, Deserialize, Serialize};
 
 pub type ClientId = u16;
@@ -51,5 +52,92 @@ impl Transaction {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum TransactionRecord {
+    Deposit {
+        client: ClientId,
+        amount: Decimal,
+        succeeded: bool,
+        disputed: bool,
+    },
+    Withdrawal {
+        client: ClientId,
+        amount: Decimal,
+        succeeded: bool,
+        disputed: bool,
+    },
+}
+
+impl TransactionRecord {
+    pub fn deposit(client: ClientId, amount: Decimal, succeeded: bool) -> Self {
+        Self::Deposit {
+            client,
+            amount,
+            succeeded,
+            disputed: false,
+        }
+    }
+
+    pub fn withdrawal(client: ClientId, amount: Decimal, succeeded: bool) -> Self {
+        Self::Withdrawal {
+            client,
+            amount,
+            succeeded,
+            disputed: false,
+        }
+    }
+
+    pub fn client(&self) -> ClientId {
+        match self {
+            Self::Deposit { client, .. } => *client,
+            Self::Withdrawal { client, .. } => *client,
+        }
+    }
+
+    pub fn successful_amount(&self) -> Option<Decimal> {
+        match self {
+            Self::Deposit {
+                amount,
+                succeeded: true,
+                ..
+            } => Some(*amount),
+            Self::Withdrawal {
+                amount,
+                succeeded: true,
+                ..
+            } => Some(*amount),
+            _ => None,
+        }
+    }
+
+    pub fn disputed(&self) -> bool {
+        match self {
+            Self::Deposit { disputed, .. } => *disputed,
+            Self::Withdrawal { disputed, .. } => *disputed,
+        }
+    }
+
+    pub fn direction(&mut self) -> Decimal {
+        match self {
+            Self::Deposit { .. } => dec!(1.0),
+            Self::Withdrawal { .. } => dec!(-1.0),
+        }
+    }
+
+    pub fn dispute(&mut self) {
+        match self {
+            Self::Deposit { disputed, .. } => *disputed = true,
+            Self::Withdrawal { disputed, .. } => *disputed = true,
+        }
+    }
+
+    pub fn resolve_dispute(&mut self) {
+        match self {
+            Self::Deposit { disputed, .. } => *disputed = false,
+            Self::Withdrawal { disputed, .. } => *disputed = false,
+        }
     }
 }

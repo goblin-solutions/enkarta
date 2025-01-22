@@ -6,7 +6,7 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CliError;
-use crate::types::{ClientId, Transaction, TransactionType};
+use crate::types::{ClientId, Transaction, TransactionRecord, TransactionType};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Account {
@@ -28,13 +28,18 @@ impl Account {
         }
     }
 
-    pub fn deposit(&mut self, amount: Decimal) {
-        self.available += amount;
-        self.total = self.available + self.held;
+    pub fn deposit(&mut self, amount: Decimal) -> bool {
+        if !self.locked {
+            self.available += amount;
+            self.total = self.available + self.held;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn withdraw(&mut self, amount: Decimal) -> bool {
-        if self.available > amount {
+        if self.available >= amount && !self.locked {
             self.available -= amount;
             self.total = self.available + self.held;
             true
@@ -43,115 +48,166 @@ impl Account {
         }
     }
 
-    pub fn dispute(&mut self, amount: Decimal) {}
-    pub fn resolve(&mut self, amount: Decimal) {}
-    pub fn freeze(&mut self, amount: Decimal) {}
+    pub fn dispute(&mut self, amount: Decimal) {
+        self.held += amount;
+        self.total = self.held + self.available;
+    }
+
+    pub fn resolve(&mut self, amount: Decimal) {
+        self.held -= amount;
+        self.total = self.held + self.available;
+    }
+
+    pub fn chargeback(&mut self, amount: Decimal) {
+        self.held -= amount;
+        self.total = self.held + self.available;
+        self.locked = true;
+    }
 }
 
 const TX_PART: &str = "transactions";
 
-#[derive(Debug, Serialize, Deserialize)]
-enum TransactionRecord {
-    Deposit {
-        client: ClientId,
-        amount: Decimal,
-        disputed: bool,
-    },
-    Withdrawal {
-        client: ClientId,
-        amount: Decimal,
-        succeeded: bool,
-        disputed: bool,
-    },
-}
-
-impl TransactionRecord {
-    pub fn deposit(client: ClientId, amount: Decimal) -> Self {
-        Self::Deposit {
-            client,
-            amount,
-            disputed: false,
-        }
-    }
-
-    pub fn withdrawal(client: ClientId, amount: Decimal, succeeded: bool) -> Self {
-        Self::Withdrawal {
-            client,
-            amount,
-            succeeded,
-            disputed: false,
-        }
-    }
-}
 pub struct AccountStates {
     _tx_db: Keyspace,
     transactions: PartitionHandle,
-    record: HashMap<ClientId, Account>,
+    accounts: HashMap<ClientId, Account>,
 }
 
 impl AccountStates {
-    pub fn new() -> Result<Self, CliError> {
-        let tx_db = Config::new("./temp_db").temporary(true).open()?;
+    pub fn new(db_name: &str) -> Result<Self, CliError> {
+        let tx_db = Config::new(db_name).temporary(true).open()?;
         let transactions = tx_db.open_partition(TX_PART, Default::default())?;
         Ok(Self {
             _tx_db: tx_db,
             transactions,
-            record: Default::default(),
+            accounts: Default::default(),
         })
     }
 
     pub fn submit(&mut self, tx: Transaction) -> Result<(), CliError> {
-        // all amounts are now valid
-        // we can safely unwrap deposits and withdrawal amounts
         tx.validate()?;
 
         match tx.tx_type {
-            TransactionType::Deposit => {
-                let deposit = TransactionRecord::deposit(tx.client, tx.amount.unwrap());
-                let encoded = bincode::serialize(&deposit)?;
-                self.transactions.insert(&tx.tx.to_be_bytes(), encoded)?;
-
-                let acct = self
-                    .record
-                    .entry(tx.client)
-                    .or_insert(Account::new(tx.client));
-
-                acct.deposit(tx.amount.unwrap())
-            }
-            TransactionType::Withdrawal => {
-                let acct = self
-                    .record
-                    .entry(tx.client)
-                    .or_insert(Account::new(tx.client));
-
-                let successful = acct.withdraw(tx.amount.unwrap());
-
-                let withdrawal =
-                    TransactionRecord::withdrawal(tx.client, tx.amount.unwrap(), successful);
-                let encoded = bincode::serialize(&withdrawal)?;
-                self.transactions.insert(&tx.tx.to_be_bytes(), encoded)?;
-            }
-            TransactionType::Dispute => {
-                let Some(encoded) = self.transactions.get(&tx.tx.to_be_bytes())? else {
-                    return Ok(());
-                };
-            }
-            TransactionType::Resolve => {
-                let Some(encoded) = self.transactions.get(&tx.tx.to_be_bytes())? else {
-                    return Ok(());
-                };
-            }
-            TransactionType::ChargeBack => {
-                let Some(encoded) = self.transactions.get(&tx.tx.to_be_bytes())? else {
-                    return Ok(());
-                };
-            }
+            TransactionType::Deposit => self.handle_deposit(tx),
+            TransactionType::Withdrawal => self.handle_withdrawal(tx),
+            TransactionType::Dispute => self.handle_dispute(tx),
+            TransactionType::Resolve => self.handle_resolve(tx),
+            TransactionType::ChargeBack => self.handle_chargeback(tx),
         }
-
-        Ok(())
     }
 
     pub fn finish(self) -> Vec<Account> {
-        self.record.into_values().collect()
+        self.accounts.into_values().collect()
+    }
+
+    fn handle_deposit(&mut self, tx: Transaction) -> Result<(), CliError> {
+        let acct = self
+            .accounts
+            .entry(tx.client)
+            .or_insert(Account::new(tx.client));
+
+        let succeeded = acct.deposit(tx.amount.unwrap());
+
+        let deposit = TransactionRecord::deposit(tx.client, tx.amount.unwrap(), succeeded);
+        let encoded = bincode::serialize(&deposit)?;
+        self.transactions.insert(&tx.tx.to_be_bytes(), encoded)?;
+        Ok(())
+    }
+
+    fn handle_withdrawal(&mut self, tx: Transaction) -> Result<(), CliError> {
+        let acct = self
+            .accounts
+            .entry(tx.client)
+            .or_insert(Account::new(tx.client));
+
+        let successful = acct.withdraw(tx.amount.unwrap());
+
+        let withdrawal = TransactionRecord::withdrawal(tx.client, tx.amount.unwrap(), successful);
+        let encoded = bincode::serialize(&withdrawal)?;
+        self.transactions.insert(&tx.tx.to_be_bytes(), encoded)?;
+        Ok(())
+    }
+
+    fn handle_dispute(&mut self, tx: Transaction) -> Result<(), CliError> {
+        let Some(encoded) = self.transactions.get(&tx.tx.to_be_bytes())? else {
+            return Ok(());
+        };
+
+        let mut record: TransactionRecord = bincode::deserialize(&encoded)?;
+        let amount = record.successful_amount();
+
+        if record.client() != tx.client || record.disputed() {
+            return Ok(());
+        }
+
+        let Some(amount) = amount else {
+            return Ok(());
+        };
+
+        let acct = self
+            .accounts
+            .entry(tx.client)
+            .or_insert(Account::new(tx.client)); // unreachable
+
+        acct.dispute(amount * record.direction());
+
+        record.dispute();
+        let encoded = bincode::serialize(&record)?;
+        self.transactions.insert(&tx.tx.to_be_bytes(), encoded)?;
+        Ok(())
+    }
+
+    fn handle_resolve(&mut self, tx: Transaction) -> Result<(), CliError> {
+        let Some(encoded) = self.transactions.get(&tx.tx.to_be_bytes())? else {
+            return Ok(());
+        };
+
+        let mut record: TransactionRecord = bincode::deserialize(&encoded)?;
+        let amount = record.successful_amount();
+
+        if record.client() != tx.client || !record.disputed() {
+            return Ok(());
+        }
+
+        let Some(amount) = amount else {
+            return Ok(());
+        };
+
+        let acct = self
+            .accounts
+            .entry(tx.client)
+            .or_insert(Account::new(tx.client)); // unreachable
+
+        acct.resolve(amount * record.direction());
+
+        record.resolve_dispute();
+        let encoded = bincode::serialize(&record)?;
+        self.transactions.insert(&tx.tx.to_be_bytes(), encoded)?;
+        Ok(())
+    }
+
+    fn handle_chargeback(&mut self, tx: Transaction) -> Result<(), CliError> {
+        let Some(encoded) = self.transactions.get(&tx.tx.to_be_bytes())? else {
+            return Ok(());
+        };
+
+        let record: TransactionRecord = bincode::deserialize(&encoded)?;
+        let amount = record.successful_amount();
+
+        if record.client() != tx.client {
+            return Ok(());
+        }
+
+        let Some(amount) = amount else {
+            return Ok(());
+        };
+
+        let acct = self
+            .accounts
+            .entry(tx.client)
+            .or_insert(Account::new(tx.client));
+
+        acct.chargeback(amount);
+        Ok(())
     }
 }

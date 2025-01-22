@@ -25,7 +25,7 @@ fn main() -> Result<(), CliError> {
     let file =
         std::fs::File::open(&path).map_err(|_| CliError::ReadError(file_path.to_string()))?;
     let mut reader = Reader::from_reader(file);
-    let mut queue = AccountStates::new()?;
+    let mut queue = AccountStates::new("./tmp_db")?;
 
     for result in reader.deserialize() {
         let transaction: Transaction = result?;

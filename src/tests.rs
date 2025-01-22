@@ -1,4 +1,3 @@
-
 use super::*;
 use csv::{ReaderBuilder, WriterBuilder};
 use job_queue::Account;
@@ -8,12 +7,12 @@ use types::TransactionType;
 #[test]
 fn deserialize() -> Result<(), CliError> {
     let input = "\
- type,client,tx,amount
- deposit,1,1,1.0
- withdrawal,2,5,3.0
- dispute,1,1,
- resolve,2,5,
- chargeback,1,1,";
+type,client,tx,amount
+deposit,1,1,1.0
+withdrawal,2,5,3.0
+dispute,1,1,
+resolve,2,5,
+chargeback,1,1,";
 
     let cursor = Cursor::new(input);
     let mut reader = ReaderBuilder::new().from_reader(cursor);
