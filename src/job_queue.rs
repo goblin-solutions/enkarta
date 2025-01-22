@@ -230,7 +230,7 @@ impl AccountStates {
             .entry(tx.client)
             .or_insert(Account::new(tx.client));
 
-        acct.chargeback(amount);
+        acct.chargeback(amount * record.direction());
         Ok(())
     }
 }

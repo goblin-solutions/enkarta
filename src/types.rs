@@ -120,7 +120,7 @@ impl TransactionRecord {
         }
     }
 
-    pub fn direction(&mut self) -> Decimal {
+    pub fn direction(&self) -> Decimal {
         match self {
             Self::Deposit { .. } => dec!(1.0),
             Self::Withdrawal { .. } => dec!(-1.0),
