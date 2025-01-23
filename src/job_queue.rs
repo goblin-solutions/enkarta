@@ -129,7 +129,7 @@ impl AccountStates {
 
         let deposit = TransactionRecord::deposit(tx.client, tx.amount.unwrap(), succeeded);
         let encoded = serde_cbor::to_vec(&deposit)?;
-        self.transactions.insert(&tx.tx.to_be_bytes(), encoded)?;
+        self.transactions.insert(tx.tx.to_be_bytes(), encoded)?;
         Ok(())
     }
 
@@ -143,12 +143,12 @@ impl AccountStates {
 
         let withdrawal = TransactionRecord::withdrawal(tx.client, tx.amount.unwrap(), successful);
         let encoded = serde_cbor::to_vec(&withdrawal)?;
-        self.transactions.insert(&tx.tx.to_be_bytes(), encoded)?;
+        self.transactions.insert(tx.tx.to_be_bytes(), encoded)?;
         Ok(())
     }
 
     fn handle_dispute(&mut self, tx: Transaction) -> Result<(), CliError> {
-        let Some(encoded) = self.transactions.get(&tx.tx.to_be_bytes())? else {
+        let Some(encoded) = self.transactions.get(tx.tx.to_be_bytes())? else {
             return Ok(());
         };
 
@@ -174,12 +174,12 @@ impl AccountStates {
 
         record.dispute();
         let encoded = serde_cbor::to_vec(&record)?;
-        self.transactions.insert(&tx.tx.to_be_bytes(), encoded)?;
+        self.transactions.insert(tx.tx.to_be_bytes(), encoded)?;
         Ok(())
     }
 
     fn handle_resolve(&mut self, tx: Transaction) -> Result<(), CliError> {
-        let Some(encoded) = self.transactions.get(&tx.tx.to_be_bytes())? else {
+        let Some(encoded) = self.transactions.get(tx.tx.to_be_bytes())? else {
             return Ok(());
         };
 
@@ -205,12 +205,12 @@ impl AccountStates {
 
         record.resolve_dispute();
         let encoded = serde_cbor::to_vec(&record)?;
-        self.transactions.insert(&tx.tx.to_be_bytes(), encoded)?;
+        self.transactions.insert(tx.tx.to_be_bytes(), encoded)?;
         Ok(())
     }
 
     fn handle_chargeback(&mut self, tx: Transaction) -> Result<(), CliError> {
-        let Some(encoded) = self.transactions.get(&tx.tx.to_be_bytes())? else {
+        let Some(encoded) = self.transactions.get(tx.tx.to_be_bytes())? else {
             return Ok(());
         };
 
